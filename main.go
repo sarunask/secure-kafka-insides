@@ -1,121 +1,53 @@
 package main
 
 import (
+	"fmt"
 	"github.com/Shopify/sarama"
-	"crypto/x509"
-	"io/ioutil"
-	"crypto/tls"
+	"github.com/sarunask/secure-kafka-insides/kafka"
 	"log"
-	"flag"
 	"os"
 	"strings"
-	"fmt"
+	"github.com/sarunask/secure-kafka-insides/security"
+	"time"
+	"context"
 )
 
-var (
-	caFile 		= flag.String("ca", "ca.pem", "The optional certificate authority file for TLS client authentication")
-	certFile  	= flag.String("cert", "cert.pem", "The optional certificate file for client authentication")
-	keyFile 	= flag.String("key", "priv.pem", "The optional key file for client authentication")
-	brokers		= flag.String("brokers","127.0.0.1:9094", "The Kafka brokers to connect to, as a comma separated list")
-	verbose   	= flag.Bool("verbose", true, "Turn on Sarama logging")
-)
-
-func createTlsConfiguration() (t *tls.Config) {
-	if *certFile != "" && *keyFile != "" && *caFile != "" {
-		cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		caCert, err := ioutil.ReadFile(*caFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
-
-		t = &tls.Config{
-			Certificates:       []tls.Certificate{cert},
-			RootCAs:            caCertPool,
-			InsecureSkipVerify: true,
-		}
+func main() {
+	if os.Getenv("VAULT_ADDR") == "" ||
+		os.Getenv("VAULT_TOKEN") == "" ||
+		os.Getenv("VAULT_TOKEN_RENEW_PERIOD") == "" ||
+		os.Getenv("VAULT_PKI_ISSUE_ENDPOINT") == "" ||
+		os.Getenv("KAFKA_PKI_BASE_FQDN") == "" ||
+		os.Getenv("KAFKA_PKI_MANAGER_NAME") == "" ||
+		os.Getenv("KAFKA_BROKERS") == "" {
+		log.Fatal("Require such env variables: VAULT_TOKEN, VAULT_ADDR, " +
+			"VAULT_PKI_ISSUE_ENDPOINT, KAFKA_PKI_BASE_FQDN, KAFKA_PKI_MANAGER_NAME, " +
+			"KAFKA_BROKERS, VAULT_TOKEN_RENEW_PERIOD")
 	}
-	// will be nil by default if nothing is provided
-	return t
-}
-
-func newAdminClient(brokerList []string) sarama.Client {
-
-	// For the data collector, we are looking for strong consistency semantics.
-	// Because we don't change the flush settings, sarama will try to produce messages
-	// as fast as possible to keep latency low.
-	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForAll // Wait for all in-sync replicas to ack the message
-	config.Producer.Retry.Max = 10                   // Retry up to 10 times to produce the message
-	config.Producer.Return.Successes = true
-	config.ClientID = "acl_reader"
-	tlsConfig := createTlsConfiguration()
-	if tlsConfig != nil {
-		config.Net.TLS.Config = tlsConfig
-		config.Net.TLS.Enable = true
-	}
-
-	// On the broker side, you may want to change the following settings to get
-	// stronger consistency guarantees:
-	// - For your broker, set `unclean.leader.election.enable` to false
-	// - For the topic, you could increase `min.insync.replicas`.
-	adminClient, err := sarama.NewClient(brokerList, config)
-	if err != nil {
-		log.Fatalln("Failed to start Sarama admin client:", err)
-	}
-
-	return adminClient
-}
-
-func newBroker(brokerList []string) *sarama.Broker {
-
-	// For the data collector, we are looking for strong consistency semantics.
-	// Because we don't change the flush settings, sarama will try to produce messages
-	// as fast as possible to keep latency low.
-	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForAll // Wait for all in-sync replicas to ack the message
-	config.Producer.Retry.Max = 10                   // Retry up to 10 times to produce the message
-	config.Producer.Return.Successes = true
-	config.Version = sarama.V1_0_0_0
-	config.ClientID = "acl_reader"
-	config.Net.TLS.Config = createTlsConfiguration()
-	config.Net.TLS.Enable = true
-
-	// On the broker side, you may want to change the following settings to get
-	// stronger consistency guarantees:
-	// - For your broker, set `unclean.leader.election.enable` to false
-	// - For the topic, you could increase `min.insync.replicas`.
-	broker := sarama.NewBroker(brokerList[0])
-	err := broker.Open(config)
-	if err != nil {
-		log.Fatalln("Failed to open Sarama broker:", err)
-	}
-
-	return broker
-}
-
-func main()  {
-	flag.Parse()
-
-	if *verbose {
+	if os.Getenv("VERBOSE") == "1" {
 		sarama.Logger = log.New(os.Stdout, "[sarama] ", log.LstdFlags)
 	}
+	//Get Context shared between routines
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // cancel when we are finished
 
-	if *brokers == "" {
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
+	go security.RenewTokenIfNeeded(ctx)
 
-	brokerList := strings.Split(*brokers, ",")
+	//Get new TLS config
+	securityConfig := security.NewConfig()
+
+	time.Sleep(40*time.Second)
+
+	brokers := os.Getenv("KAFKA_BROKERS")
+
+	brokerList := strings.Split(brokers, ",")
 	log.Printf("Kafka brokers: %s", strings.Join(brokerList, ", "))
 
-	adminClient := newAdminClient(brokerList)
+	configClient := kafka.Config{
+		BrokerList: brokerList,
+	}
+
+	adminClient := configClient.NewClient(securityConfig)
 	defer func() {
 		if err := adminClient.Close(); err != nil {
 			log.Panic(err)
@@ -126,25 +58,21 @@ func main()  {
 		log.Fatal(err)
 	}
 	fmt.Println(topics)
-	brokers := adminClient.Brokers()
-	for i := 0; i < len(brokers); i++ {
-		connected, err := brokers[i].Connected()
-		if err != nil {
-			continue
-		}
-		log.Printf("Broker %v is connected? %v", i, connected)
+
+	configBroker := kafka.Config{
+		BrokerList: configClient.BrokerList,
+		TLS:  configClient.TLS,
 	}
 
-
 	describeAclsReq := &sarama.DescribeAclsRequest{
-			AclFilter: sarama.AclFilter{
-			ResourceType: sarama.AclResourceTopic,
+		AclFilter: sarama.AclFilter{
+			ResourceType:   sarama.AclResourceTopic,
 			PermissionType: sarama.AclPermissionAny,
-			Operation: sarama.AclOperationAny,
+			Operation:      sarama.AclOperationAny,
 		},
 	}
 
-	broker :=  newBroker(brokerList)
+	broker := configBroker.NewBroker(securityConfig)
 	if err != nil {
 		log.Fatalln("Failed to open Sarama broker:", err)
 	}
