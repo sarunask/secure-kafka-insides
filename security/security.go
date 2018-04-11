@@ -6,7 +6,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"github.com/hashicorp/vault/api"
-	"io/ioutil"
 	"log"
 	"os"
 	"time"
@@ -20,38 +19,31 @@ type Config struct {
 	PrivateKey string
 }
 
+//Function would be called to return Config struct. Initialization would be done:
+// 1. Vault is called to get new certs
+// 2. New management TLS certificates with name KAFKA_PKI_MANAGER_NAME.KAFKA_PKI_MANAGER_NAME would be
+// issued. It's TTL by default is 120h
+// 3. Certificates are stored into structure as strings
+// 4. Certificates would be parsed to TLS.Config structure, which would be used to connect to
+// Kafka cluster
 func NewConfig() *Config  {
+	//Initialize config
 	c := &Config{}
+
+	if err := c.getAndParseCerts(); err != nil {
+		log.Fatal(err)
+	}
 
 	return c
 }
 
-//Function would get Vault Logical client
-func getVaultLogical() (*api.Logical, error) {
-	client, err := api.NewClient(nil)
-	if err != nil {
-		return nil, fmt.Errorf("getVaultLogical: couldn't get Vault client")
-	}
-	return client.Logical(), nil
-}
-
 //Function would check if certificate has expired
-func hasCertificateExpired(rootCAFile, certFile *string) bool {
-	rootPEM, err := ioutil.ReadFile(*rootCAFile)
-	if err != nil {
-		log.Print("failed to read rootCA from file: ", *rootCAFile)
-		return true
-	}
+func (c *Config) HasCertificateExpired() bool {
 	roots := x509.NewCertPool()
-	if ok := roots.AppendCertsFromPEM(rootPEM); !ok {
+	if ok := roots.AppendCertsFromPEM([]byte(c.CACert)); !ok {
 		log.Fatal("failed to parse root certificate")
 	}
-	certPEM, err := ioutil.ReadFile(*certFile)
-	if err != nil {
-		log.Print("failed to read certificate from file: ", rootCAFile)
-		return true
-	}
-	block, _ := pem.Decode(certPEM)
+	block, _ := pem.Decode([]byte(c.Cert))
 	if block == nil {
 		log.Fatal("failed to decode certificate PEM")
 	}
@@ -71,8 +63,7 @@ func hasCertificateExpired(rootCAFile, certFile *string) bool {
 }
 
 //Go routing, which would renew Vault token on periodic basis
-//Routine would be canceled by message in done channel
-func RenewTokenIfNeeded(ctx context.Context) {
+func RenewToken(ctx context.Context) {
 	client, err := api.NewClient(nil)
 	if err != nil {
 		log.Fatal("getVaultLogical: couldn't get Vault client")
@@ -104,73 +95,92 @@ func RenewTokenIfNeeded(ctx context.Context) {
 	}
 }
 
+//Go routing, which would renew TLS Certificate on periodic basis
+func RenewCertificate(ctx context.Context, c *Config) {
+	renewPeriod, err := time.ParseDuration(os.Getenv("VAULT_TLS_RENEW_PERIOD"))
+	if err != nil {
+		log.Fatal("Can't parse VAULT_TLS_RENEW_PERIOD")
+	}
+	//Start renewal 10 seconds before TTL of cert
+	ticker := time.NewTicker(renewPeriod-(10*time.Second))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Print("Ending TLS renewal")
+			return
+		case <-ticker.C:
+			if ! c.HasCertificateExpired() {
+				continue
+			}
+			if err := c.getAndParseCerts(); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+}
+
 //Function would go to Vault to fetch new certificate
-func getNewCertificateFromVault(caFile, certFile, keyFile *string) {
+func (c *Config) getNewCertificateFromVault() error {
 	vaultLogical, err := getVaultLogical()
 	if err != nil {
-		log.Print("couldn't get Vault client: ", err)
-		return
+		return fmt.Errorf("couldn't get Vault client: %s", err)
 	}
 	secret, err := vaultLogical.Write(os.Getenv("VAULT_PKI_ISSUE_ENDPOINT"),
 		map[string]interface{}{
 			"common_name": fmt.Sprintf("%s.%s",
 				os.Getenv("KAFKA_PKI_MANAGER_NAME"),
 				os.Getenv("KAFKA_PKI_BASE_FQDN")),
-			"ttl": "1h",
+			"ttl": os.Getenv("VAULT_TLS_RENEW_PERIOD"),
 		})
 	if err != nil {
-		log.Print("Couldn't issue new TLS certificates from Vault: ", err)
-		return
+		return fmt.Errorf("couldn't issue new TLS certificates from Vault: %s", err)
 	}
 
-	ioutil.WriteFile(*caFile, []byte(secret.Data["issuing_ca"].(string)), 0600)
-	ioutil.WriteFile(*certFile, []byte(secret.Data["certificate"].(string)), 0600)
-	ioutil.WriteFile(*keyFile, []byte(secret.Data["private_key"].(string)), 0600)
+	c.CACert = secret.Data["issuing_ca"].(string)
+	c.Cert = secret.Data["certificate"].(string)
+	c.PrivateKey = secret.Data["private_key"].(string)
+	return nil
 }
 
-//Function would be called upon Config struct. If it's already pre-initialized, code
-// would do nothing. If struct is empty, initialization would be done:
-// 1. Permanent certificate store is read
-// 2. If certificates are expired Vault is called
-// 1. If certificates
-// 2. New management TLS certificates with name KAFKA_PKI_MANAGER_NAME.KAFKA_PKI_MANAGER_NAME would be
-// issued. It's TTL by default is 120h
-// 3. Certificates would be transfered to TLS.Config structure, which would be used to connect to
-// Kafka cluster
-func (c *Config) NewConfig() {
-	//Only create TLS config if it's empty
-	if c.TLS != nil {
-		return
-	}
-	basePath := os.Getenv("CLIENT_PERM_STORAGE")
-	if len(basePath) == 0 {
-		basePath = "."
-	}
-	caFile := fmt.Sprintf("%s/ca.pem", basePath)
-	certFile := fmt.Sprintf("%s/cert.pem", basePath)
-	keyFile := fmt.Sprintf("%s/key.pem", basePath)
+func (c *Config) getAndParseCerts() error {
+	var cert tls.Certificate
+	var keyDERBlock, certDERBlock *pem.Block
+	var err error
 
-	if hasCertificateExpired(&caFile, &certFile) {
-		getNewCertificateFromVault(&caFile, &certFile, &keyFile)
+	if err := c.getNewCertificateFromVault(); err != nil {
+		return err
 	}
-
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		log.Fatal(err)
+	//Parse and assign public key
+	if certDERBlock, _ = pem.Decode([]byte(c.Cert)); certDERBlock == nil {
+		return fmt.Errorf("NewConfig: failed to parse cert PEM data")
 	}
+	cert.Certificate = append(cert.Certificate, certDERBlock.Bytes)
 
-	rootPEM, err := ioutil.ReadFile(caFile)
-	if err != nil {
-		log.Print("failed to read rootCA from file: ", caFile)
-		return
+	//Parse and assign private key
+	if keyDERBlock, _ = pem.Decode([]byte(c.PrivateKey)); keyDERBlock == nil {
+		return fmt.Errorf("NewConfig: failed to parse private key PEM data")
 	}
-
+	if cert.PrivateKey, err = x509.ParsePKCS1PrivateKey(keyDERBlock.Bytes); err != nil {
+		return fmt.Errorf("NewConfig: failed to parse private key data")
+	}
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(rootPEM)
+	caCertPool.AppendCertsFromPEM([]byte(c.CACert))
 
 	c.TLS = &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		RootCAs:            caCertPool,
 		InsecureSkipVerify: true,
 	}
+	return nil
 }
+
+//Function would get Vault Logical client
+func getVaultLogical() (*api.Logical, error) {
+	client, err := api.NewClient(nil)
+	if err != nil {
+		return nil, fmt.Errorf("getVaultLogical: couldn't get Vault client")
+	}
+	return client.Logical(), nil
+}
+

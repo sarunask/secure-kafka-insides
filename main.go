@@ -16,13 +16,14 @@ func main() {
 	if os.Getenv("VAULT_ADDR") == "" ||
 		os.Getenv("VAULT_TOKEN") == "" ||
 		os.Getenv("VAULT_TOKEN_RENEW_PERIOD") == "" ||
+		os.Getenv("VAULT_TLS_RENEW_PERIOD") == "" ||
 		os.Getenv("VAULT_PKI_ISSUE_ENDPOINT") == "" ||
 		os.Getenv("KAFKA_PKI_BASE_FQDN") == "" ||
 		os.Getenv("KAFKA_PKI_MANAGER_NAME") == "" ||
 		os.Getenv("KAFKA_BROKERS") == "" {
-		log.Fatal("Require such env variables: VAULT_TOKEN, VAULT_ADDR, " +
+		log.Fatal("Require such env variables: VAULT_ADDR, VAULT_TOKEN, " +
 			"VAULT_PKI_ISSUE_ENDPOINT, KAFKA_PKI_BASE_FQDN, KAFKA_PKI_MANAGER_NAME, " +
-			"KAFKA_BROKERS, VAULT_TOKEN_RENEW_PERIOD")
+			"KAFKA_BROKERS, VAULT_TOKEN_RENEW_PERIOD, VAULT_TLS_RENEW_PERIOD")
 	}
 	if os.Getenv("VERBOSE") == "1" {
 		sarama.Logger = log.New(os.Stdout, "[sarama] ", log.LstdFlags)
@@ -31,10 +32,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cancel when we are finished
 
-	go security.RenewTokenIfNeeded(ctx)
+	go security.RenewToken(ctx)
 
 	//Get new TLS config
 	securityConfig := security.NewConfig()
+
+	go security.RenewCertificate(ctx, securityConfig)
 
 	time.Sleep(40*time.Second)
 
