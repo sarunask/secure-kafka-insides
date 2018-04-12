@@ -53,34 +53,9 @@ func main() {
 		}
 	}()
 
-	configBroker := kafka.Config{
-		BrokerList: kafka.ConfigClient.BrokerList,
-		TLS:  kafka.ConfigClient.TLS,
-	}
-
-	describeAclsReq := &sarama.DescribeAclsRequest{
-		AclFilter: sarama.AclFilter{
-			ResourceType:   sarama.AclResourceTopic,
-			PermissionType: sarama.AclPermissionAny,
-			Operation:      sarama.AclOperationAny,
-		},
-	}
-
-	broker := configBroker.NewBroker(security.SecConfig)
-	defer func() {
-		if err := broker.Close(); err != nil {
-			log.Panic(err)
-		}
-	}()
-
-	describeAclsResp, err := broker.DescribeAcls(describeAclsReq)
-	if err != nil {
-		log.Fatal(err)
-	}
-	acls := describeAclsResp.ResourceAcls
-	log.Print(acls)
 	//Web handlers and server
 	http.HandleFunc("/", web.RootHandler)
-	http.HandleFunc("/topics", web.Topics)
+	http.HandleFunc("/topics", web.KafkaTopics)
+	http.HandleFunc("/usersAcls/", web.KafkaUsersAcls)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
