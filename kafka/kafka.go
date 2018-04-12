@@ -12,6 +12,15 @@ type Config struct {
 	BrokerList []string
 }
 
+var ConfigClient *Config
+
+func NewConfig(brokerList []string) *Config {
+	c := &Config{
+		BrokerList: brokerList,
+	}
+	return c
+}
+
 func (c *Config) NewClient(security *security.Config) sarama.Client {
 
 	// For the data collector, we are looking for strong consistency semantics.

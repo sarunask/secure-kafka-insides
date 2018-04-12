@@ -1,15 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/sarunask/secure-kafka-insides/kafka"
 	"log"
 	"os"
 	"strings"
 	"github.com/sarunask/secure-kafka-insides/security"
-	"time"
 	"context"
+	"net/http"
+	"github.com/sarunask/secure-kafka-insides/web"
 )
 
 func main() {
@@ -35,36 +35,27 @@ func main() {
 	go security.RenewToken(ctx)
 
 	//Get new TLS config
-	securityConfig := security.NewConfig()
+	security.SecConfig = security.NewConfig()
 
-	go security.RenewCertificate(ctx, securityConfig)
-
-	time.Sleep(40*time.Second)
+	go security.RenewCertificate(ctx, security.SecConfig)
 
 	brokers := os.Getenv("KAFKA_BROKERS")
 
 	brokerList := strings.Split(brokers, ",")
 	log.Printf("Kafka brokers: %s", strings.Join(brokerList, ", "))
 
-	configClient := kafka.Config{
-		BrokerList: brokerList,
-	}
+	kafka.ConfigClient = kafka.NewConfig(brokerList)
 
-	adminClient := configClient.NewClient(securityConfig)
+	web.KafkaClient = kafka.ConfigClient.NewClient(security.SecConfig)
 	defer func() {
-		if err := adminClient.Close(); err != nil {
+		if err := web.KafkaClient.Close(); err != nil {
 			log.Panic(err)
 		}
 	}()
-	topics, err := adminClient.Topics()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(topics)
 
 	configBroker := kafka.Config{
-		BrokerList: configClient.BrokerList,
-		TLS:  configClient.TLS,
+		BrokerList: kafka.ConfigClient.BrokerList,
+		TLS:  kafka.ConfigClient.TLS,
 	}
 
 	describeAclsReq := &sarama.DescribeAclsRequest{
@@ -75,10 +66,7 @@ func main() {
 		},
 	}
 
-	broker := configBroker.NewBroker(securityConfig)
-	if err != nil {
-		log.Fatalln("Failed to open Sarama broker:", err)
-	}
+	broker := configBroker.NewBroker(security.SecConfig)
 	defer func() {
 		if err := broker.Close(); err != nil {
 			log.Panic(err)
@@ -91,4 +79,8 @@ func main() {
 	}
 	acls := describeAclsResp.ResourceAcls
 	log.Print(acls)
+	//Web handlers and server
+	http.HandleFunc("/", web.RootHandler)
+	http.HandleFunc("/topics", web.Topics)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

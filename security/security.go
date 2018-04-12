@@ -19,6 +19,8 @@ type Config struct {
 	PrivateKey string
 }
 
+var SecConfig *Config
+
 //Function would be called to return Config struct. Initialization would be done:
 // 1. Vault is called to get new certs
 // 2. New management TLS certificates with name KAFKA_PKI_MANAGER_NAME.KAFKA_PKI_MANAGER_NAME would be
