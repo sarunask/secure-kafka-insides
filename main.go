@@ -55,6 +55,7 @@ func main() {
 
 	//Web handlers and server
 	http.HandleFunc("/", web.RootHandler)
+	http.HandleFunc("/enterUsersCN", web.EnterClientCNHandler)
 	http.HandleFunc("/topics", web.KafkaTopics)
 	http.HandleFunc("/usersAcls/", web.KafkaUsersAcls)
 	log.Fatal(http.ListenAndServe(":8080", nil))

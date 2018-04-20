@@ -1,0 +1,21 @@
+<h1>Acls for user with common_name {{ .UserCN }}</h1>
+<table>
+    <thead>
+    <tr>
+        <th>Topic Name</th>
+        <th>Operation</th>
+        <th>Permission</th>
+        <th>Host</th>
+    </tr>
+    </thead>
+    <tbody>
+    {{ range $_, $value := .ACLs }}
+    <tr>
+        <td>{{ $value.TopicName }}</td>
+        <td>{{ $value.Operation }}</td>
+        <td>{{ $value.Permission }}</td>
+        <td>{{ $value.Host }}</td>
+    </tr>
+    {{ end }}
+    </tbody>
+</table>
