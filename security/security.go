@@ -115,6 +115,7 @@ func RenewCertificate(ctx context.Context, c *Config) {
 			if ! c.HasCertificateExpired() {
 				continue
 			}
+			log.Print("starting certificate renew")
 			if err := c.getAndParseCerts(); err != nil {
 				log.Fatal(err)
 			}
