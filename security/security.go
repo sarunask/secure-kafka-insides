@@ -19,8 +19,9 @@ type Config struct {
 	PrivateKey string
 }
 
-var SecConfig *Config
-
+var (
+	SecConfig *Config
+)
 //Function would be called to return Config struct. Initialization would be done:
 // 1. Vault is called to get new certs
 // 2. New management TLS certificates with name KAFKA_PKI_MANAGER_NAME.KAFKA_PKI_MANAGER_NAME would be
@@ -112,9 +113,6 @@ func RenewCertificate(ctx context.Context, c *Config) {
 			log.Print("Ending TLS renewal")
 			return
 		case <-ticker.C:
-			if ! c.HasCertificateExpired() {
-				continue
-			}
 			log.Print("starting certificate renew")
 			if err := c.getAndParseCerts(); err != nil {
 				log.Fatal(err)

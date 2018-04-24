@@ -87,6 +87,10 @@ LOOP:
 		}
 	}
 	sort.Strings(topics)
+	//Remove first as it's __consumer_offsets - Kafka internal one
+	if strings.Contains(topics[0], "__consumer_offsets") {
+		topics = topics[1:]
+	}
 	data := Data{}
 	data.Topics = &topics
 	renderTemplate(w, "topics", &data)
