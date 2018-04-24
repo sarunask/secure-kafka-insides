@@ -79,6 +79,7 @@ LOOP:
 	if err != nil {
 		if i == 1 {
 			//First time try to re-initiate, maybe TLS have changed
+			KafkaClient.Close()
 			KafkaClient = kafka.ConfigClient.NewClient(security.SecConfig)
 			goto LOOP
 		} else {
