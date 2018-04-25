@@ -38,18 +38,22 @@ var (
 	templates = template.Must(template.ParseFiles(
 		"templates/index.html",
 		"templates/client_rights.html",
+		"templates/topic_rights.html",
 		"templates/topics.html",
 		"templates/acls.html",
+		"templates/topic_acls.html",
 		))
 )
 
 type Data struct {
-	Topics *[]string
-	ACLs   *[]ACL
-	UserCN *string
+	Topics    *[]string
+	ACLs      *[]ACL
+	UserCN    *string
+	TopicName *string
 }
 
 type ACL struct {
+	Principal  string
 	TopicName  string
 	Permission string
 	Operation  string
@@ -69,6 +73,10 @@ func RootHandler(w http.ResponseWriter, _ *http.Request) {
 
 func EnterClientCNHandler(w http.ResponseWriter, _ *http.Request) {
 	renderTemplate(w, "client_rights", nil)
+}
+
+func EnterTopicHandler(w http.ResponseWriter, _ *http.Request) {
+	renderTemplate(w, "topic_rights", nil)
 }
 
 func KafkaTopics(w http.ResponseWriter, _ *http.Request) {
@@ -102,27 +110,7 @@ func KafkaUsersAcls(w http.ResponseWriter, r *http.Request) {
 	user := r.Form.Get("userCN")
 	userCN := fmt.Sprintf("CN=%s", user)
 
-	configBroker := kafka.Config{
-		BrokerList: kafka.ConfigClient.BrokerList,
-		TLS:  kafka.ConfigClient.TLS,
-	}
-
-	describeAclsReq := &sarama.DescribeAclsRequest{
-		AclFilter: sarama.AclFilter{
-			ResourceType:   sarama.AclResourceTopic,
-			PermissionType: sarama.AclPermissionAny,
-			Operation:      sarama.AclOperationAny,
-		},
-	}
-
-	broker := configBroker.NewBroker(security.SecConfig)
-	defer func() {
-		if err := broker.Close(); err != nil {
-			log.Panic(err)
-		}
-	}()
-
-	describeAclsResp, err := broker.DescribeAcls(describeAclsReq)
+	describeAclsResp, err := getKafkaAclsForTopics()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -149,4 +137,60 @@ func KafkaUsersAcls(w http.ResponseWriter, r *http.Request) {
 	}
 	data.ACLs = &dataAcls
 	renderTemplate(w, "acls", &data)
+}
+
+func KafkaTopicsAcls(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	topic := r.Form.Get("topic")
+
+	describeAclsResp, err := getKafkaAclsForTopics()
+	if err != nil {
+		log.Fatal(err)
+	}
+	acls := describeAclsResp.ResourceAcls
+
+	data := Data{
+		TopicName: &topic,
+	}
+	dataAcls := make([]ACL, 0)
+	for _, acl := range acls {
+		if strings.Compare(acl.ResourceName, topic) != 0 {
+			continue
+		}
+		for _, innerAcl := range acl.Acls {
+			acl := ACL{
+				Principal: innerAcl.Principal,
+				Permission: aclPermissions[innerAcl.PermissionType],
+				Operation: aclOperations[innerAcl.Operation],
+				Host: innerAcl.Host,
+			}
+			dataAcls = append(dataAcls, acl)
+		}
+	}
+	data.ACLs = &dataAcls
+	renderTemplate(w, "topic_acls", &data)
+}
+
+func getKafkaAclsForTopics() (*sarama.DescribeAclsResponse, error)  {
+	configBroker := kafka.Config{
+		BrokerList: kafka.ConfigClient.BrokerList,
+		TLS:  kafka.ConfigClient.TLS,
+	}
+
+	describeAclsReq := &sarama.DescribeAclsRequest{
+		AclFilter: sarama.AclFilter{
+			ResourceType:   sarama.AclResourceTopic,
+			PermissionType: sarama.AclPermissionAny,
+			Operation:      sarama.AclOperationAny,
+		},
+	}
+
+	broker := configBroker.NewBroker(security.SecConfig)
+	defer func() {
+		if err := broker.Close(); err != nil {
+			log.Panic(err)
+		}
+	}()
+
+	return broker.DescribeAcls(describeAclsReq)
 }

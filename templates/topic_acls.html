@@ -1,0 +1,23 @@
+<h1>Acls for topic {{ .TopicName }}</h1>
+<table>
+    <thead>
+    <tr>
+        <th>Principal Name</th>
+        <th>Operation</th>
+        <th>Permission</th>
+        <th>Host</th>
+    </tr>
+    </thead>
+    <tbody>
+    {{ range $_, $value := .ACLs }}
+    <tr>
+        <td>{{ $value.Principal }}</td>
+        <td>{{ $value.Operation }}</td>
+        <td>{{ $value.Permission }}</td>
+        <td>{{ $value.Host }}</td>
+    </tr>
+    {{ end }}
+    </tbody>
+</table>
+<br>
+<a href="/">back</a>
