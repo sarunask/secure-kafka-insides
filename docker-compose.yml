@@ -1,0 +1,16 @@
+version: '3'
+services:
+  secure-kafka-insides:
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:-127.0.0.1:8200}
+      VAULT_SKIP_VERIFY: 1
+      VAULT_TOKEN: ${VAULT_TOKEN:-default}
+      VAULT_PKI_ISSUE_ENDPOINT: ${VAULT_PKI_ISSUE_ENDPOINT:-pki/issue/servers-managers}
+      KAFKA_PKI_BASE_FQDN: ${KAFKA_PKI_BASE_FQDN:-servers-managers.genesaas.io}
+      KAFKA_PKI_MANAGER_NAME: ${1KAFKA_PKI_MANAGER_NAME:-sk-test-manager}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-127.0.0.1:9094}
+      VAULT_TOKEN_RENEW_PERIOD: ${VAULT_TOKEN_RENEW_PERIOD:-1h}
+      VAULT_TLS_RENEW_PERIOD: ${VAULT_TLS_RENEW_PERIOD:-1h}
+    build: .
+    ports:
+     - "8080:8080"
