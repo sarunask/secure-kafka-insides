@@ -97,7 +97,7 @@ LOOP:
 	}
 	sort.Strings(topics)
 	//Remove first as it's __consumer_offsets - Kafka internal one
-	if strings.Contains(topics[0], "__consumer_offsets") {
+	if len(topics) != 0 && strings.Contains(topics[0], "__consumer_offsets") {
 		topics = topics[1:]
 	}
 	data := Data{}
@@ -107,7 +107,7 @@ LOOP:
 
 func KafkaUsersAcls(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	user := r.Form.Get("userCN")
+	user := strings.TrimSpace(r.Form.Get("userCN"))
 	userCN := fmt.Sprintf("CN=%s", user)
 
 	describeAclsResp, err := getKafkaAclsForTopics()
@@ -141,7 +141,7 @@ func KafkaUsersAcls(w http.ResponseWriter, r *http.Request) {
 
 func KafkaTopicsAcls(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	topic := r.Form.Get("topic")
+	topic := strings.TrimSpace(r.Form.Get("topic"))
 
 	describeAclsResp, err := getKafkaAclsForTopics()
 	if err != nil {
